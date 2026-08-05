@@ -1,0 +1,312 @@
+.\"
+.\" tarpitd - an SMTP tarpit for FreeBSD
+.\"
+.Dd August 5, 2026
+.Dt TARPITD 8
+.Os
+.Sh NAME
+.Nm tarpitd
+.Nd SMTP tarpit for redirected spam sources
+.Sh SYNOPSIS
+.Nm
+.Op Fl dvLQt
+.Op Fl l Ar addr Ns Op : Ns Ar port
+.Op Fl p Ar port
+.Op Fl u Ar user
+.Op Fl r Ar directory
+.Op Fl P Ar pidfile
+.Op Fl n Ar workers
+.Op Fl c Ar maxconn
+.Op Fl i Ar per-ip
+.Op Fl S Ar drip-ms
+.Op Fl M Ar max-drip-ms
+.Op Fl R Ar ramp-seconds
+.Op Fl g Ar greet-seconds
+.Op Fl b Ar banner-lines
+.Op Fl e Ar ehlo-pad
+.Op Fl T Ar max-session
+.Op Fl B Ar chunk
+.Op Fl w Ar sockbuf
+.Op Fl H Ar hostname
+.Sh DESCRIPTION
+.Nm
+answers SMTP connections and holds them open for as long as the peer can be
+persuaded to wait.
+It is meant to sit behind a packet filter rule that redirects known spam
+sources to it, in the manner of
+.Xr spamd 8
+on OpenBSD, and it never accepts or delivers anything.
+.Pp
+Every reply is a syntactically valid SMTP response, so the sender has no
+reason to give up, but it is written out one byte at a time; commands are
+read back at the same rate.
+Every terminal answer is a
+.Em temporary
+failure, so the message stays in the sender's queue and it comes back later
+to be tarpitted again.
+The intent is to occupy a slot in the sending botnet's delivery queue for
+hours rather than to reject mail quickly.
+.Pp
+.Nm
+does not decide who is a spammer; that is the job of whatever populates the
+firewall table that redirects traffic here.
+.Ss Tactics
+.Bl -tag -width Ds
+.It Greeting delay
+Nothing at all is sent for
+.Fl g
+seconds after the connection is accepted.
+.It Stuttering
+Output leaves one byte at a time, input is consumed one byte at a time, with
+.Fl S
+milliseconds between bytes.
+The peer's send buffer therefore never drains and it blocks in
+.Fn write .
+.It Endless greeting
+The banner is a multiline
+.Li 220-
+reply.
+A conforming client must wait for the final
+.Li "220 "
+line before it may transmit, and with
+.Fl b Cm 0
+that line never comes.
+.It Early talker detection
+Nothing legitimate transmits before the greeting has finished, since SMTP is
+server-speaks-first.
+A peer that does is certainly spamware, so its greeting is switched to the
+endless form and its stutter delay is doubled for the rest of the session.
+.It Extension bloat
+The
+.Cm EHLO
+response is padded with
+.Fl e
+extra unknown extensions, which a client is required to ignore but must
+still read.
+.It TLS stall
+If
+.Cm STARTTLS
+is offered and used,
+.Nm
+sends a TLS record header announcing a 16376 byte
+.Li ServerHello
+and then dribbles random filler.
+The peer's TLS library has committed to reading a complete handshake message
+before it can do anything else, including time out at the SMTP layer, and
+another record starts as soon as one finishes.
+.It Credential harvesting
+.Cm AUTH PLAIN ,
+.Cm LOGIN
+and
+.Cm CRAM-MD5
+are offered.
+What the peer sends is base64 decoded and logged, then rejected with a
+.Li 535 ,
+which leaves it free to keep guessing.
+.It Tiny windows
+Socket buffers are clamped to
+.Fl w
+bytes, so the peer may only ever have a few hundred bytes in flight.
+This is also what keeps kernel memory per connection small enough to hold
+thousands of sessions.
+.It Backlog parking
+At
+.Fl c
+connections
+.Nm
+stops calling
+.Xr accept 2
+rather than refusing anything.
+The excess piles up in the kernel's listen queue, where the senders sit
+connected and silent at no cost in descriptors to us.
+.It Delay ramping
+The stutter delay doubles every
+.Fl R
+seconds up to
+.Fl M .
+A peer that has already been held for an hour is evidently patient, so it can
+be held for almost free.
+All delays are jittered so the timing is not a fingerprint.
+.El
+.Sh OPTIONS
+.Bl -tag -width ".Fl M Ar max-drip-ms"
+.It Fl B Ar chunk
+Bytes written per tick, 1 to 64.
+Default 1.
+Input is always read one byte per tick regardless of this setting.
+.It Fl b Ar banner-lines
+Continuation lines in the greeting before the final
+.Li "220 "
+line.
+.Cm 0
+means the greeting never ends.
+Default 24.
+.It Fl c Ar maxconn
+Maximum simultaneous connections.
+Default 4096.
+Lowered automatically if the descriptor limit cannot be raised far enough.
+.It Fl d
+Do not detach; log to standard error instead of
+.Xr syslog 3 .
+.It Fl e Ar ehlo-pad
+Bogus extensions to append to the
+.Cm EHLO
+reply.
+Default 24.
+.It Fl g Ar greet-seconds
+Silence before the first byte of the greeting.
+Default 10.
+.It Fl H Ar hostname
+Host name to announce.
+Defaults to the system host name.
+Consider setting this to something that does not identify the tarpit.
+.It Fl i Ar per-ip
+Maximum simultaneous connections from one source address, to stop a single
+host from consuming the whole table.
+.Cm 0
+disables the limit.
+Default 16.
+.It Fl L
+Do not log envelope addresses or harvested credentials.
+.It Fl l Ar addr Ns Op : Ns Ar port
+Address to listen on; may be given more than once.
+Accepts
+.Ar addr : Ns Ar port ,
+.Sm off
+.Op Ar v6addr
+: Ar port ,
+.Sm on
+a bare address, or a bare port.
+Default
+.Li 127.0.0.1:8025 .
+.It Fl M Ar max-drip-ms
+Ceiling for the stutter delay after ramping.
+Default 30000.
+Keep it below the peer's inactivity timeout, which is usually 60 to 300
+seconds.
+.It Fl n Ar workers
+Worker processes sharing the listeners through
+.Dv SO_REUSEPORT_LB .
+Default 1.
+Only useful above roughly 50000 concurrent connections.
+.It Fl P Ar pidfile
+Write the process id here.
+.It Fl p Ar port
+Default port for
+.Fl l
+arguments that do not carry one.
+Default 8025.
+.It Fl Q
+Honour
+.Cm QUIT
+and close promptly.
+By default
+.Cm QUIT
+is answered with an endless multiline
+.Li 221-
+reply.
+.It Fl R Ar ramp-seconds
+Double the stutter delay every this many seconds.
+.Cm 0
+disables ramping.
+Default 600.
+.It Fl r Ar directory
+.Xr chroot 2
+here before dropping privileges.
+.It Fl S Ar drip-ms
+Milliseconds between bytes at the start of a session.
+Default 1500.
+.It Fl T Ar max-session
+Hard cap on session length in seconds.
+.Cm 0
+means no cap.
+Default 86400.
+.It Fl t
+Do not offer
+.Cm STARTTLS .
+.It Fl u Ar user
+Drop privileges to this user after binding.
+Default
+.Li nobody .
+An empty argument disables the change.
+.It Fl v
+Increase verbosity.
+Once logs connections, envelopes and session summaries; twice logs every
+command.
+.It Fl w Ar sockbuf
+Socket buffer size in bytes, which bounds the window advertised to the peer.
+.Cm 0
+leaves the system default.
+Default 512.
+.El
+.Sh SIGNALS
+.Bl -tag -width ".Dv SIGTERM"
+.It Dv SIGINFO
+.It Dv SIGHUP
+Write a statistics summary to the log.
+.It Dv SIGTERM
+.It Dv SIGINT
+Shut down.
+Held connections are dropped, which is the one thing the spammer wanted.
+.El
+.Sh IMPLEMENTATION NOTES
+All connections are handled by one process on a single
+.Xr kqueue 2 ,
+with one
+.Dv EVFILT_TIMER
+per connection driving the stutter and one
+.Dv EVFILT_READ
+registered
+.Dv EV_CLEAR
+purely to notice end of file and early talkers.
+Data is deliberately left sitting in the receive buffer so that the window
+stays shut.
+A connection costs one descriptor, about 1 KB of user memory and whatever
+.Fl w
+allows the kernel to allocate.
+.Sh EXAMPLES
+Redirect a
+.Xr fail2ban 8
+maintained table of blocked sources to the tarpit and run it:
+.Bd -literal -offset indent
+ipfw table 22 create type addr
+ipfw add 1000 fwd 127.0.0.1,8025 tcp from "table(22)" to me 25 in
+sysrc tarpitd_enable=YES
+service tarpitd start
+.Ed
+.Pp
+Watch what is being caught:
+.Bd -literal -offset indent
+tarpitd -d -v -v -l 127.0.0.1:8025 -u ""
+.Ed
+.Pp
+Maximum aggression, at the cost of losing impatient bots early:
+.Bd -literal -offset indent
+tarpitd -l 127.0.0.1:8025 -S 10000 -b 0 -g 30 -T 0
+.Ed
+.Sh SEE ALSO
+.Xr kqueue 2 ,
+.Xr ipfw 8 ,
+.Xr spamd 8
+.Sh STANDARDS
+.Nm
+implements enough of
+.Rs
+.%A J. Klensin
+.%T Simple Mail Transfer Protocol
+.%R RFC 5321
+.Re
+to be believed, and deliberately violates its timing recommendations.
+.Sh CAVEATS
+Never point
+.Nm
+at traffic you have not already classified as hostile.
+It is indistinguishable from a broken mail server, and a legitimate sender
+caught by it will retry until its queue lifetime expires and then bounce the
+message.
+.Pp
+Holding tens of thousands of connections needs kernel tuning; see
+.Va kern.ipc.maxsockets ,
+.Va kern.maxfiles
+and
+.Va net.inet.tcp.syncache.hashsize .

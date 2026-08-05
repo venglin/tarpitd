@@ -1,0 +1,12 @@
+# bsd.prog.mk build products.  Anchored to the top level so that the rc.d
+# script, which is also called "tarpitd", is not swept up with the binary.
+/tarpitd
+/tarpitd.full
+/tarpitd.debug
+/tarpitd.8.gz
+*.o
+*.pieo
+*.po
+*.So
+.depend
+.depend.*
