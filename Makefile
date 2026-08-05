@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Przemyslaw Frasunek <przemyslaw@frasunek.com>
 #
 # tarpitd - an SMTP tarpit for FreeBSD
 #
