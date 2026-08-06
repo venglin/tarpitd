@@ -317,6 +317,19 @@ It is indistinguishable from a broken mail server, and a legitimate sender
 caught by it will retry until its queue lifetime expires and then bounce the
 message.
 .Pp
+A build with
+.Cm WITH_CAPSICUM
+enters
+.Xr capsicum 4
+capability mode after binding and dropping privileges.
+Capability mode forbids reopening
+.Pa /var/run/log ,
+so if
+.Xr syslogd 8
+is restarted the daemon keeps running but silently stops logging until it is
+restarted itself.
+The FreeBSD port leaves this option off for that reason.
+.Pp
 Holding tens of thousands of connections needs kernel tuning; see
 .Va kern.ipc.maxsockets ,
 .Va kern.maxfiles

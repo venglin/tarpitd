@@ -60,9 +60,26 @@ Optional:
 ```sh
 make WITH_CAPSICUM=yes   # workers enter capability mode after bind()
 make DEBUG=yes
+make NO_RCD=yes          # skip the rc.d script
 ```
 
 Nothing outside the base system is required (`kqueue`, `libutil`).
+
+`WITH_CAPSICUM` works, but comes with a caveat: capability mode forbids
+reopening `/var/run/log`, so if `syslogd` is restarted the daemon keeps running
+and silently stops logging until it is restarted itself. That is why the port
+leaves the option off by default.
+
+### FreeBSD port
+
+The port lives in `freebsd-port/mail/tarpitd` and is also in the ports tree as
+`mail/tarpitd`:
+
+```sh
+pkg install tarpitd
+# or
+cd /usr/ports/mail/tarpitd && make install clean
+```
 
 ## ipfw
 
