@@ -11,14 +11,18 @@
 #
 #	make WITH_CAPSICUM=yes		sandbox the workers with capsicum(4)
 #	make DEBUG=yes			-O0 -g, no optimisation
+#	make NO_RCD=yes			skip the rc.d script (the port
+#					installs its own via USE_RC_SUBR)
 #
 
 PROG=		tarpitd
 SRCS=		tarpitd.c smtp.c
 MAN=		tarpitd.8
 
-BINDIR?=	/usr/local/sbin
-MANDIR?=	/usr/local/share/man/man
+PREFIX?=	/usr/local
+BINDIR?=	${PREFIX}/sbin
+MANDIR?=	${PREFIX}/share/man/man
+RCDIR?=		${PREFIX}/etc/rc.d
 
 CFLAGS+=	-std=c99 -Wall -Wextra -Wno-unused-parameter
 CFLAGS+=	-D_BSD_SOURCE
@@ -37,10 +41,24 @@ CFLAGS+=	-DWITH_CAPSICUM
 # out-of-tree build, where bsd.libnames.mk only converts LIBADD with a warning.
 LDADD=		-lutil
 
-# rc.d script is not installed by bsd.prog.mk; do it here.
-afterinstall:
-	${INSTALL} -d ${DESTDIR}/usr/local/etc/rc.d
-	${INSTALL} -m 555 ${.CURDIR}/rc.d/tarpitd \
-	    ${DESTDIR}/usr/local/etc/rc.d/tarpitd
+# bsd.prog.mk knows nothing about rc.d, so install the script here.  The
+# FreeBSD port sets NO_RCD and installs its own copy through USE_RC_SUBR,
+# which substitutes %%PREFIX%% and registers the file in the package list.
+CLEANFILES+=	tarpitd.rc
+
+# bsd.prog.mk expects its target directories to exist already, which is true
+# of the base system but not of an empty DESTDIR such as a port's stage tree.
+beforeinstall:
+	${INSTALL} -d ${DESTDIR}${BINDIR}
+	${INSTALL} -d ${DESTDIR}${MANDIR}8
+
+.if !defined(NO_RCD)
+afterinstall: tarpitd.rc
+	${INSTALL} -d ${DESTDIR}${RCDIR}
+	${INSTALL} -m 555 tarpitd.rc ${DESTDIR}${RCDIR}/tarpitd
+
+tarpitd.rc: ${.CURDIR}/rc.d/tarpitd
+	sed -e 's|%%PREFIX%%|${PREFIX}|g' ${.ALLSRC} > ${.TARGET}
+.endif
 
 .include <bsd.prog.mk>

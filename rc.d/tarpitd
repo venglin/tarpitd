@@ -35,7 +35,7 @@ load_rc_config $name
 : ${tarpitd_pidfile:="/var/run/tarpitd.pid"}
 
 pidfile="${tarpitd_pidfile}"
-command="/usr/local/sbin/tarpitd"
+command="%%PREFIX%%/sbin/tarpitd"
 command_args="-P ${pidfile} -u ${tarpitd_runas} -l ${tarpitd_listen} -c ${tarpitd_maxconn}"
 
 start_precmd="tarpitd_precmd"
