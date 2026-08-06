@@ -14,6 +14,8 @@ USES=		uidfix
 USE_GITHUB=	yes
 GH_ACCOUNT=	venglin
 
+# files/tarpitd.in is a copy of rc.d/tarpitd from the distribution; both carry
+# %%PREFIX%% and must be kept in step when the startup script changes.
 USE_RC_SUBR=	tarpitd
 
 # NO_RCD: the rc.d script is installed through USE_RC_SUBR instead, so that
