@@ -1,6 +1,6 @@
 PORTNAME=	tarpitd
 DISTVERSIONPREFIX=	v
-DISTVERSION=	1.0.0
+DISTVERSION=	1.0.1
 CATEGORIES=	mail
 
 MAINTAINER=	przemyslaw@frasunek.com
