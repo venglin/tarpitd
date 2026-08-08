@@ -315,7 +315,7 @@ Redirect a
 maintained table of blocked sources to the tarpit and run it:
 .Bd -literal -offset indent
 ipfw table 22 create type addr
-ipfw add 1000 fwd 127.0.0.1,8025 tcp from "table(22)" to me 25 in
+ipfw add 1000 fwd 127.0.0.1,8025 ip4 from "table(22)" to me 25 proto tcp in
 sysrc tarpitd_enable=YES
 service tarpitd start
 .Ed
@@ -328,6 +328,20 @@ tarpitd -d -v -v -l 127.0.0.1:8025 -u ""
 Maximum aggression, at the cost of losing impatient bots early:
 .Bd -literal -offset indent
 tarpitd -l 127.0.0.1:8025 -S 10000 -b 0 -g 30 -T 0
+.Ed
+.Pp
+The
+.Cm ip4
+above matters as soon as a companion IPv6 rule exists.
+.Cm me
+matches IPv6 addresses as well as IPv4, so without it the rule also catches
+IPv6 traffic and forwards it to an IPv4 next hop, which cannot work: the
+connection is refused, and since
+.Cm fwd
+ends rule evaluation the IPv6 rule is never reached.
+.Bd -literal -offset indent
+ipfw add 1001 fwd ::1,8025 tcp from "table(22)" to me6 25 in
+tarpitd -l 127.0.0.1:8025 -l "[::1]:8025"
 .Ed
 .Sh SEE ALSO
 .Xr kqueue 2 ,

@@ -114,8 +114,15 @@ Assuming your classifier fills table 22, redirect it to the tarpit:
 
 ```sh
 ipfw table 22 create type addr        # if it does not exist yet
-ipfw add 1000 fwd 127.0.0.1,8025 tcp from "table(22)" to me 25 in
+ipfw add 1000 fwd 127.0.0.1,8025 ip4 from "table(22)" to me 25 proto tcp in
 ```
+
+**The `ip4` is not optional if you also run the IPv6 rule below.** `me`
+matches IPv6 addresses as well as IPv4, so without it this rule also catches
+IPv6 traffic and tries to forward it to an IPv4 next hop. That cannot work:
+the connection is refused, and because `fwd` ends rule evaluation the IPv6
+rule never gets a look in. The symptom is a flat refusal on IPv6 and a
+redirect rule whose counter never leaves zero.
 
 An `ipfw fwd` rule with a local address delivers the packet locally on the
 given port without rewriting the headers, so `getsockname()` inside tarpitd
@@ -128,6 +135,12 @@ For IPv6:
 ipfw add 1001 fwd ::1,8025 tcp from "table(22)" to me6 25 in
 tarpitd -l 127.0.0.1:8025 -l "[::1]:8025"
 ```
+
+Bear in mind that spam over IPv6 is rare next to IPv4 — measured here, 87 to
+1 — and that hosts which do spam over IPv6 rotate addresses inside their /64.
+Banning single /128 addresses is whack-a-mole and the tarpit never sees them:
+ban the /64 instead. RFC 6177 guarantees a site is never assigned anything
+smaller, so it is the smallest unit that means "the same customer".
 
 Check that `net.inet.ip.fw.one_pass` does not upset the rest of your ruleset —
 with `one_pass=1` (the default) a packet does not return to later rules after
