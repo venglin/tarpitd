@@ -92,6 +92,22 @@ enum tp_flags {
 	F_BDATLAST	= 0x0200	/* current BDAT chunk was flagged LAST */
 };
 
+/*
+ * Protocol stages, each with the timeout RFC 5321 4.5.3.2 tells a client to
+ * allow for it.  We spend a percentage of that on the corresponding reply, so
+ * every answer lands just inside the sender's patience however long it is.
+ */
+enum tp_phase {
+	PH_GREET = 0,	/* server greeting			5 min */
+	PH_CMD,		/* HELO, MAIL, RCPT and friends		5 min */
+	PH_DATAINIT,	/* the 354 answer to DATA		2 min */
+	PH_DATABLOCK,	/* while swallowing the body		3 min */
+	PH_DATADOT,	/* the answer to the final dot		10 min */
+	PH_NPHASES
+};
+
+extern const int tp_phase_secs[PH_NPHASES];
+
 enum tp_mech {
 	M_NONE = 0,
 	M_PLAIN,
@@ -133,6 +149,7 @@ struct conn {
 	uint64_t	bdat_left;	/* BDAT octets still expected */
 
 	time_t		start;
+	int64_t		deadline;	/* ms, when this reply must be complete */
 
 	char		line[TP_LINEMAX];
 	char		out[TP_OUTMAX];
@@ -147,8 +164,10 @@ struct tp_cfg {
 	int		maxperip;	/* 0 = unlimited */
 	int		workers;
 	int		chunk;		/* bytes per read/write tick */
-	int		drip_ms;	/* initial delay between ticks */
-	int		maxdrip_ms;	/* ceiling after ramping */
+	int		drip_ms;	/* floor for the delay between ticks */
+	int		maxdrip_ms;	/* ceiling for the delay between ticks */
+	int		budget_pct;	/* share of the RFC timeout to spend,
+					   0 disables pacing by deadline */
 	int		ramp_s;		/* double the delay every N seconds */
 	int		greet_s;	/* silence before the first banner byte */
 	int		banner_lines;	/* 0 = never finish the greeting */
@@ -178,10 +197,12 @@ struct tp_stats {
 extern struct tp_cfg	cfg;
 extern struct tp_stats	stats;
 extern time_t		tp_now;
+extern int64_t		tp_now_ms;	/* monotonic, for deadlines */
 
 /* tarpitd.c */
 void	tp_log(int pri, const char *fmt, ...) __printflike(2, 3);
 void	tp_conn_close(struct conn *c, const char *why);
+void	tp_phase(struct conn *c, int phase);
 char	*tp_sanitize(char *dst, size_t dlen, const char *src, size_t slen);
 
 /* smtp.c */
@@ -189,5 +210,6 @@ void	tp_open(struct conn *c);
 void	tp_refill(struct conn *c);
 void	tp_input(struct conn *c, const unsigned char *buf, size_t n);
 void	tp_early_talker(struct conn *c);
+size_t	tp_gen_estimate(const struct conn *c);
 
 #endif /* TARPITD_H */

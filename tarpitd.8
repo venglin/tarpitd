@@ -22,8 +22,9 @@
 .Op Fl n Ar workers
 .Op Fl c Ar maxconn
 .Op Fl i Ar per-ip
-.Op Fl S Ar drip-ms
-.Op Fl M Ar max-drip-ms
+.Op Fl S Ar min-ms
+.Op Fl M Ar max-ms
+.Op Fl X Ar budget-pct
 .Op Fl R Ar ramp-seconds
 .Op Fl g Ar greet-seconds
 .Op Fl b Ar banner-lines
@@ -69,11 +70,24 @@ Nothing at all is sent for
 .Fl g
 seconds after the connection is accepted.
 .It Stuttering
-Output leaves one byte at a time, input is consumed one byte at a time, with
-.Fl S
-milliseconds between bytes.
-The peer's send buffer therefore never drains and it blocks in
+Output leaves one byte at a time and input is consumed one byte at a time, so
+the peer's send buffer never drains and it blocks in
 .Fn write .
+.It Deadline pacing
+The delay between bytes is not fixed.
+Each stage of the dialogue has a timeout that RFC 5321 tells a sender to
+allow for it, and
+.Nm
+spends
+.Fl X
+percent of that on the corresponding reply, dividing the time left by the
+bytes left before every byte.
+A long reply is therefore delivered briskly and a short one is stretched, and
+either way it arrives just inside the sender's patience.
+This is what buys the time: what counts is the number of round trips a sender
+survives, not how slowly any single one of them is delivered.
+A greeting stuttered so slowly that nobody ever sees the end of it yields one
+timeout and nothing else.
 .It Endless greeting
 The banner is a multiline
 .Li 220-
@@ -167,7 +181,9 @@ reply.
 Default 24.
 .It Fl g Ar greet-seconds
 Silence before the first byte of the greeting.
-Default 10.
+Default 3.
+It costs every session that much and only catches early talkers, so raising
+it trades throughput for a rare diagnostic.
 .It Fl H Ar hostname
 Host name to announce.
 Defaults to the system host name.
@@ -191,11 +207,23 @@ Accepts
 a bare address, or a bare port.
 Default
 .Li 127.0.0.1:8025 .
-.It Fl M Ar max-drip-ms
-Ceiling for the stutter delay after ramping.
+.It Fl M Ar max-ms
+Ceiling for the delay between bytes.
 Default 30000.
-Keep it below the peer's inactivity timeout, which is usually 60 to 300
-seconds.
+.It Fl X Ar budget-pct
+Percentage of the RFC 5321 timeout for each stage to spend on that
+stage's reply, at most 95.
+Default 80, which is 240 seconds for the greeting and for ordinary commands,
+96 for the answer to
+.Cm DATA ,
+144 for draining one receive buffer of message body, and 480 for the answer
+to the final dot.
+.Cm 0
+turns deadline pacing off, leaving the fixed rate of
+.Fl S
+with the ramp of
+.Fl R ,
+which is what releases before 1.1.0 did.
 .It Fl n Ar workers
 Worker processes sharing the listeners through
 .Dv SO_REUSEPORT_LB .
@@ -218,16 +246,21 @@ is answered with an endless multiline
 .Li 221-
 reply.
 .It Fl R Ar ramp-seconds
-Double the stutter delay every this many seconds.
+Double the delay every this many seconds.
 .Cm 0
 disables ramping.
 Default 600.
+Only applies where no deadline does: an endless greeting, the
+.Cm STARTTLS
+stall, or with
+.Fl X Cm 0 .
 .It Fl r Ar directory
 .Xr chroot 2
 here before dropping privileges.
-.It Fl S Ar drip-ms
-Milliseconds between bytes at the start of a session.
-Default 1500.
+.It Fl S Ar min-ms
+Floor for the delay between bytes.
+Default 20.
+Without deadline pacing this is instead the fixed starting rate.
 .It Fl T Ar max-session
 Hard cap on session length in seconds.
 .Cm 0

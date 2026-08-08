@@ -438,6 +438,42 @@ gen_tls(struct conn *c)
 		c->gen_idx = 1;
 }
 
+/*
+ * Roughly how many bytes the running generator still owes us.  Only feeds
+ * the delay calculation, which recomputes on every byte, so being out by a
+ * line or two costs nothing.  Endless generators return 0: there is no
+ * completion to be late for, so no deadline applies.
+ */
+size_t
+tp_gen_estimate(const struct conn *c)
+{
+	unsigned left;
+
+	switch (c->gen) {
+	case G_BANNER:
+	case G_QUIT:
+		if (c->gen_left == GEN_INF)
+			return (0);
+		return ((size_t)c->gen_left * 48 + 48);
+	case G_EHLO:
+		left = 2 + (unsigned)NITEMS(ehlo_exts) + (unsigned)cfg.ehlo_pad;
+		left = left > c->gen_idx ? left - c->gen_idx : 1;
+		return ((size_t)left * 36);
+	case G_HELP:
+		left = (unsigned)NITEMS(helplines) + 1;
+		left = left > c->gen_idx ? left - c->gen_idx : 1;
+		return ((size_t)left * 60);
+	case G_EXPN:
+		if (c->gen_left == GEN_INF)
+			return (0);
+		return ((size_t)c->gen_left * 60 + 30);
+	case G_TLS:
+		return (0);
+	default:
+		return (0);
+	}
+}
+
 void
 tp_refill(struct conn *c)
 {
@@ -476,6 +512,7 @@ tp_open(struct conn *c)
 	c->state = S_BANNER;
 	c->next = S_CMD;
 	c->gen = G_BANNER;
+	tp_phase(c, PH_GREET);
 	c->gen_left = cfg.banner_lines > 0 ?
 	    (uint16_t)cfg.banner_lines : GEN_INF;
 }
@@ -672,6 +709,7 @@ cmd_dispatch(struct conn *c, char *line)
 		c->flags |= F_DATA;
 		respond(c, S_DATA,
 		    "354 Enter mail, end with \".\" on a line by itself");
+		tp_phase(c, PH_DATAINIT);
 		return;
 	}
 	if (strcmp(vb, "BDAT") == 0) {
@@ -791,6 +829,7 @@ body_done(struct conn *c)
 	c->nrcpt = 0;
 	c->flags &= (uint16_t)~F_MAIL;
 	respond(c, S_CMD, "%s", pick(tempfails, NITEMS(tempfails)));
+	tp_phase(c, PH_DATADOT);
 }
 
 static void

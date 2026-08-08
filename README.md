@@ -35,7 +35,8 @@ at a time, and commands are read back at the same rate.
 | Tactic | What it does |
 |---|---|
 | Greeting delay | Nothing at all is sent for `-g` seconds after the connection is accepted. |
-| Stuttering | One byte every `-S` ms in each direction. The peer's send buffer never drains, so it blocks in `write()`. |
+| Stuttering | One byte at a time in each direction. The peer's send buffer never drains, so it blocks in `write()`. |
+| Deadline pacing | The delay between bytes is not fixed. Each stage has a timeout RFC 5321 tells a sender to allow, and we spend `-X` percent of it on that stage's reply, dividing time left by bytes left before every byte. A long reply goes briskly, a short one is stretched, and either way it lands just inside the sender's patience. |
 | Endless greeting | A multiline `220-` banner. An RFC-conforming client **must** wait for the final `220 ` line, and with `-b 0` that line never comes. |
 | Early talker detection | SMTP is server-speaks-first, so nothing legitimate transmits before the greeting ends. Anything that does gets the endless banner and double delays. |
 | Extension bloat | `-e` extra unknown extensions in the `EHLO` reply, which a client must read and then ignore. |
@@ -45,8 +46,34 @@ at a time, and commands are read back at the same rate.
 | Backlog parking | At `-c` connections we stop calling `accept()` instead of refusing. The excess sits in the kernel listen queue — the sender believes it is connected, and it costs us no descriptors at all. |
 | Delay ramping | The delay doubles every `-R` seconds up to `-M`. A peer that has already waited an hour is patient and can be held almost for free. All delays are jittered so the timing is not a fingerprint. |
 
-At the defaults (one byte per 1.5 s), the `EHLO` reply alone takes about
-40 minutes and a full delivery attempt takes hours.
+### Why pacing by deadline
+
+A fixed byte rate is the obvious design and it is wrong. Measured against a
+day of production traffic on a real mail server, a flat 1.5 s per byte meant
+the ~1100-byte greeting needed 27 minutes, while the median tolerance of a
+real MTA is 301 seconds — the RFC 5321 greeting timeout. Out of 473 sessions,
+**not one ever completed a single SMTP command**: 72% took one byte and left,
+and the rest gave up mid-greeting. Total time bought was one timeout each.
+
+What buys time is the number of round trips a sender survives, not how slowly
+any one of them is delivered. Pacing every reply to land just inside its own
+timeout turns that one timeout into a whole dialogue:
+
+| Stage | RFC 5321 timeout | at `-X 80` |
+|---|---|---|
+| greeting | 300 s | 240 s |
+| `EHLO`, `MAIL`, `RCPT` | 300 s | 240 s each |
+| `354` after `DATA` | 120 s | 96 s |
+| one receive buffer of body | 180 s | 144 s |
+| reply to the final dot | 600 s | 480 s |
+
+That is about 26 minutes of round trips before the body transfer, which is
+paced against the receive buffer and can add hours. Endless replies — a
+greeting with no last line, the TLS stall, a hanging `QUIT` — have no
+completion to be late for, so they trickle one line per timeout window
+instead, indefinitely.
+
+Set `-X 0` for the old fixed-rate behaviour.
 
 ## Building and installing
 

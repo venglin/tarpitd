@@ -79,6 +79,7 @@
 #define STATS_IDENT	0x7fffffff
 #define IPHASHSZ	1024
 #define LISTEN_BACKLOG	1024
+#define TP_LINEAVG	48	/* typical reply line, for pacing estimates */
 
 struct listener {
 	int		kind;		/* K_LISTENER */
@@ -108,10 +109,11 @@ struct tp_cfg cfg = {
 	.maxperip	= 16,
 	.workers	= 1,
 	.chunk		= 1,
-	.drip_ms	= 1500,
+	.drip_ms	= 20,
 	.maxdrip_ms	= 30000,
+	.budget_pct	= 80,
 	.ramp_s		= 600,
-	.greet_s	= 10,
+	.greet_s	= 3,
 	.banner_lines	= 24,
 	.ehlo_pad	= 24,
 	.maxsess_s	= 86400,
@@ -124,6 +126,16 @@ struct tp_cfg cfg = {
 
 struct tp_stats stats;
 time_t tp_now;
+int64_t tp_now_ms;
+
+static int64_t
+now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
 
 static int kq = -1;
 static volatile sig_atomic_t quitting;
@@ -309,31 +321,122 @@ arm_timer(struct conn *c, int ms)
 		tp_conn_close(c, "timer failed");
 }
 
+/* Timeouts RFC 5321 4.5.3.2 tells a sender to allow, per protocol stage. */
+const int tp_phase_secs[PH_NPHASES] = {
+	[PH_GREET]	= 300,
+	[PH_CMD]	= 300,
+	[PH_DATAINIT]	= 120,
+	[PH_DATABLOCK]	= 180,
+	[PH_DATADOT]	= 600
+};
+
 /*
- * Delay before the next byte moves in either direction.  It ramps up with
- * the age of the session: a bot that has already been stuck for an hour is
- * clearly patient, so we can hold it for almost free.  Jitter keeps the
- * timing from being a fingerprint.
+ * Start a protocol stage: the reply we are about to produce has to be
+ * complete by this deadline or the sender gives up on us.
+ */
+void
+tp_phase(struct conn *c, int phase)
+{
+
+	if (phase < 0 || phase >= PH_NPHASES || cfg.budget_pct <= 0) {
+		c->deadline = 0;
+		return;
+	}
+	c->deadline = tp_now_ms +
+	    (int64_t)tp_phase_secs[phase] * 10 * cfg.budget_pct;
+}
+
+/*
+ * Bytes still to move before the current stage is finished.  Writing knows
+ * exactly; reading has to guess, because the length of a command is up to
+ * the sender.  The guess only has to be in the right region: the delay is
+ * recomputed from the remaining time on every single byte, so an estimate
+ * that was too low simply makes the tail of the reply hurry up.
+ */
+static long
+work_left(const struct conn *c)
+{
+	long n;
+
+	if (c->outpos < c->outlen || c->gen != G_NONE) {
+		n = (long)(c->outlen - c->outpos) + (long)tp_gen_estimate(c);
+		return (n > 0 ? n : 1);
+	}
+	return (96);			/* a command line, give or take */
+}
+
+/* ms per byte while swallowing a body, see the comment in delay_ms(). */
+static long
+body_rate(void)
+{
+	long buf = cfg.sockbuf > 0 ? cfg.sockbuf : 512;
+
+	return ((long)tp_phase_secs[PH_DATABLOCK] * 10 * cfg.budget_pct / buf);
+}
+
+/*
+ * Delay before the next byte moves in either direction.
+ *
+ * With a deadline set we simply divide the time left by the work left, so a
+ * long reply is delivered briskly and a short one is stretched, and either
+ * way it lands just inside the sender's patience.  That is the whole trick:
+ * what buys time is the number of round trips survived, not the rate of any
+ * one of them.
  */
 static int
 delay_ms(const struct conn *c)
 {
-	long base = cfg.drip_ms;
-	long age = (long)(tp_now - c->start);
+	long base;
 	long j;
 
-	if (cfg.ramp_s > 0) {
-		long steps = age / cfg.ramp_s;
+	if (cfg.budget_pct > 0 &&
+	    (c->state == S_DATA || c->state == S_BDAT)) {
+		/*
+		 * A body has no end we can aim at, so pace against the receive
+		 * buffer instead.  The sender blocks once it is full and has
+		 * to be released before its per-block timer runs out, which
+		 * means draining one bufferful per block timeout.
+		 */
+		base = body_rate();
+	} else if (cfg.budget_pct > 0 && c->gen != G_NONE &&
+	    tp_gen_estimate(c) == 0) {
+		/*
+		 * An endless generator - a greeting with no last line, the TLS
+		 * stall, a hanging QUIT - has no completion to be late for, so
+		 * a deadline would simply expire and let the delay collapse to
+		 * the floor, firehosing the peer we meant to hold.  Pace it at
+		 * one line per timeout window instead: enough to keep the
+		 * sender's inactivity timer fed, forever.
+		 */
+		base = (long)tp_phase_secs[PH_CMD] * 10 * cfg.budget_pct /
+		    TP_LINEAVG;
+	} else if (c->deadline > 0) {
+		int64_t left = c->deadline - tp_now_ms;
 
-		while (steps-- > 0 && base < cfg.maxdrip_ms)
-			base *= 2;
+		if (left < 0)
+			left = 0;	/* late: the floor takes over */
+		base = (long)(left / work_left(c));
+	} else {
+		long age = (long)(tp_now - c->start);
+
+		base = cfg.drip_ms > 0 ? cfg.drip_ms : 1;
+		if (cfg.ramp_s > 0) {
+			long steps = age / cfg.ramp_s;
+
+			while (steps-- > 0 && base < cfg.maxdrip_ms)
+				base *= 2;
+		}
 	}
+
 	if (c->flags & F_BADBOT)
 		base *= 2;
 	if (base > cfg.maxdrip_ms)
 		base = cfg.maxdrip_ms;
+	if (base < cfg.drip_ms)
+		base = cfg.drip_ms;
 	if (base < 1)
 		base = 1;
+
 	j = base / 4;
 	if (j > 0)
 		base += (long)arc4random_uniform((uint32_t)(2 * j)) - j;
@@ -442,6 +545,14 @@ conn_write(struct conn *c)
 			tp_conn_close(c, "goodbye");
 			return (0);
 		}
+		/*
+		 * Their reply timer starts the moment they finish sending,
+		 * which is while we are still reading it a byte at a time.
+		 * Reading and answering therefore share one budget, opened
+		 * here rather than when the answer is finally queued.
+		 */
+		if (c->state == S_CMD || c->state == S_AUTH)
+			tp_phase(c, PH_CMD);
 	}
 	return (1);
 }
@@ -855,6 +966,7 @@ run(void)
 			break;
 		}
 		tp_now = time(NULL);
+		tp_now_ms = now_ms();
 
 		cur_evs = evs;
 		cur_nev = n;
@@ -1096,7 +1208,8 @@ usage(void)
 	fprintf(stderr,
 "usage: tarpitd [-dv] [-l addr[:port]] [-p port] [-u user] [-r chroot]\n"
 "               [-P pidfile] [-n workers] [-c maxconn] [-i per-ip]\n"
-"               [-S drip-ms] [-M max-drip-ms] [-R ramp-s] [-g greet-s]\n"
+"               [-S min-ms] [-M max-ms] [-X budget-pct] [-R ramp-s]\n"
+"               [-g greet-s]\n"
 "               [-b banner-lines] [-e ehlo-pad] [-T max-session-s]\n"
 "               [-B chunk] [-w sockbuf] [-H hostname] [-Q] [-t] [-L]\n");
 	exit(1);
@@ -1119,7 +1232,7 @@ main(int argc, char *argv[])
 		LIST_INIT(&iphash[i]);
 
 	while ((ch = getopt(argc, argv,
-	    "B:H:LM:P:QR:S:T:b:c:de:g:i:l:n:p:r:tu:vw:")) != -1) {
+	    "B:H:LM:P:QR:S:T:X:b:c:de:g:i:l:n:p:r:tu:vw:")) != -1) {
 		switch (ch) {
 		case 'B':
 			cfg.chunk = atoi(optarg);
@@ -1147,6 +1260,9 @@ main(int argc, char *argv[])
 			break;
 		case 'T':
 			cfg.maxsess_s = atoi(optarg);
+			break;
+		case 'X':
+			cfg.budget_pct = atoi(optarg);
 			break;
 		case 'b':
 			cfg.banner_lines = atoi(optarg);
@@ -1207,6 +1323,10 @@ main(int argc, char *argv[])
 		cfg.drip_ms = 1;
 	if (cfg.maxdrip_ms < cfg.drip_ms)
 		cfg.maxdrip_ms = cfg.drip_ms;
+	if (cfg.budget_pct < 0)
+		cfg.budget_pct = 0;
+	if (cfg.budget_pct > 95)
+		cfg.budget_pct = 95;	/* leave the sender some margin */
 	if (cfg.maxconn < 1)
 		cfg.maxconn = 1;
 	if (cfg.workers < 1)
