@@ -405,6 +405,22 @@ gen_quit(struct conn *c)
  * complete handshake message before it can do anything at all, so it blocks
  * until its own timeout - typically far longer than its SMTP timeout would
  * have been.
+ *
+ * 16376 is the largest useful figure and the obvious "improvement" of
+ * declaring a bigger message, spanning records, is worse.  Measured against
+ * OpenSSL 3.0:
+ *
+ *   - While a record is incomplete the client is stuck in the record layer
+ *     and never parses the handshake header at all, so the declared message
+ *     length makes no difference.  Declaring 16 KB and declaring 16 MB held
+ *     the client for exactly as long.
+ *   - Feed it complete records so it does parse the header, and anything
+ *     past about 64 KB is refused outright with "excessive message size",
+ *     which ends the session instead of stalling it.
+ *   - The memory it commits follows the same ceiling, so there is no
+ *     resource to be pinned beyond one record buffer either.
+ *
+ * The stall is a record-layer effect.  One maximum-sized record is all of it.
  */
 static void
 gen_tls(struct conn *c)
