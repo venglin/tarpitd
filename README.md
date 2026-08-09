@@ -159,7 +159,8 @@ rc.conf variables:
 | Variable | Default | Meaning |
 |---|---|---|
 | `tarpitd_enable` | `NO` | |
-| `tarpitd_listen` | `127.0.0.1:8025` | listen address |
+| `tarpitd_listen` | empty | listen address; empty means both `127.0.0.1` and `::1` |
+| `tarpitd_chroot` | empty | chroot target; empty means `/var/empty` |
 | `tarpitd_maxconn` | `4096` | concurrent session limit |
 | `tarpitd_runas` | `nobody` | user to drop privileges to |
 | `tarpitd_pidfile` | `/var/run/tarpitd.pid` | |
@@ -169,6 +170,17 @@ rc.conf variables:
 by `rc.subr` and makes it run the whole thing under `su`, which leaves the
 daemon unable to write its pidfile or bind a privileged port, and its own
 privilege drop then fails in `setgroups()` with `EPERM`.
+
+By default the daemon binds **both loopback addresses** and chroots to
+`/var/empty` before dropping privileges. The dual bind matters: a packet
+filter can only redirect IPv6 to an IPv6 address, so listening on v4 alone
+silently drops half the traffic on a dual stacked host.
+
+The chroot survives log rotation — a rotated `syslogd` keeps the same socket —
+but not a restart of `syslogd` itself, since reopening `/var/run/log` from
+inside the jail is impossible. The daemon then keeps running and silently
+stops logging until restarted too. Restart it after restarting `syslogd`, or
+set `tarpitd_chroot` to `none` and pass `-r ""` if the trade is not worth it.
 
 Watching it live, without detaching:
 

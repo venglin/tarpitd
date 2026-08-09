@@ -205,8 +205,12 @@ Accepts
 : Ar port ,
 .Sm on
 a bare address, or a bare port.
-Default
-.Li 127.0.0.1:8025 .
+Given none, both loopback addresses are used,
+.Li 127.0.0.1
+and
+.Li ::1 :
+a packet filter can only redirect IPv6 to an IPv6 address, so binding v4
+alone silently drops half the traffic on a dual stacked host.
 .It Fl M Ar max-ms
 Ceiling for the delay between bytes.
 Default 30000.
@@ -257,6 +261,9 @@ stall, or with
 .It Fl r Ar directory
 .Xr chroot 2
 here before dropping privileges.
+Default
+.Pa /var/empty .
+An empty argument skips the change; see the caveat below.
 .It Fl S Ar min-ms
 Floor for the delay between bytes.
 Default 20.
@@ -363,6 +370,25 @@ at traffic you have not already classified as hostile.
 It is indistinguishable from a broken mail server, and a legitimate sender
 caught by it will retry until its queue lifetime expires and then bounce the
 message.
+.Pp
+The default
+.Xr chroot 2
+survives log rotation - a rotated
+.Xr syslogd 8
+keeps the same socket - but not a restart of
+.Xr syslogd 8
+itself, because reopening
+.Pa /var/run/log
+is impossible from inside the jail.
+The daemon then keeps running and silently stops logging until it is
+restarted too.
+Restart it after restarting
+.Xr syslogd 8 ,
+or run with
+.Fl r Cm \&""
+if that trade is not worth it.
+The pidfile is likewise left behind on exit, which is harmless: the next
+start takes it over.
 .Pp
 A build with
 .Cm WITH_CAPSICUM

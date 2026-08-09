@@ -1042,6 +1042,9 @@ drop_privs(const char *user, const char *jail)
 	 * done the job.  Anything else cannot work, and saying so plainly
 	 * beats failing in setgroups() with EPERM.
 	 */
+	if (jail != NULL && *jail == '\0')
+		jail = NULL;		/* -r "" opts out of the chroot */
+
 	if (uid != 0) {
 		if (pw != NULL && pw->pw_uid != uid)
 			tp_fatal("started as uid %ld, cannot become %s "
@@ -1211,7 +1214,10 @@ usage(void)
 "               [-S min-ms] [-M max-ms] [-X budget-pct] [-R ramp-s]\n"
 "               [-g greet-s]\n"
 "               [-b banner-lines] [-e ehlo-pad] [-T max-session-s]\n"
-"               [-B chunk] [-w sockbuf] [-H hostname] [-Q] [-t] [-L]\n");
+"               [-B chunk] [-w sockbuf] [-H hostname] [-Q] [-t] [-L]\n"
+"\n"
+"defaults: listen on 127.0.0.1 and ::1, chroot /var/empty, run as nobody\n"
+"          -r \"\" skips the chroot, -u \"\" keeps privileges\n");
 	exit(1);
 }
 
@@ -1219,7 +1225,7 @@ int
 main(int argc, char *argv[])
 {
 	const char *user = "nobody";
-	const char *jail = NULL;
+	const char *jail = "/var/empty";
 	const char *pidfile = NULL;
 	const char *defport = "8025";
 	int ch, i;
@@ -1346,8 +1352,15 @@ main(int argc, char *argv[])
 		cfg.myname = hostbuf;
 	}
 
-	if (TAILQ_EMPTY(&addrspecs))
+	/*
+	 * Both loopback families by default.  A packet filter can only
+	 * redirect IPv6 to an IPv6 address, so binding v4 alone silently
+	 * drops half the traffic on any dual stacked host.
+	 */
+	if (TAILQ_EMPTY(&addrspecs)) {
 		addrspec_add("127.0.0.1", defport);
+		addrspec_add("::1", defport);
+	}
 
 	openlog("tarpitd", LOG_PID | LOG_NDELAY, LOG_MAIL);
 	signal(SIGPIPE, SIG_IGN);

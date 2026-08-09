@@ -9,7 +9,8 @@
 # Add the following lines to /etc/rc.conf to enable tarpitd:
 #
 # tarpitd_enable="YES"
-# tarpitd_listen="127.0.0.1:8025"
+# tarpitd_listen=""            # empty: 127.0.0.1 and ::1
+# tarpitd_chroot=""            # empty: /var/empty
 # tarpitd_maxconn="8192"
 # tarpitd_runas="nobody"
 # tarpitd_flags=""
@@ -30,13 +31,19 @@ load_rc_config $name
 : ${tarpitd_enable:="NO"}
 : ${tarpitd_flags:=""}
 : ${tarpitd_runas:="nobody"}
-: ${tarpitd_listen:="127.0.0.1:8025"}
+: ${tarpitd_listen:=""}
+: ${tarpitd_chroot:=""}
 : ${tarpitd_maxconn:="4096"}
 : ${tarpitd_pidfile:="/var/run/tarpitd.pid"}
 
 pidfile="${tarpitd_pidfile}"
 command="%%PREFIX%%/sbin/tarpitd"
-command_args="-P ${pidfile} -u ${tarpitd_runas} -l ${tarpitd_listen} -c ${tarpitd_maxconn}"
+command_args="-P ${pidfile} -u ${tarpitd_runas} -c ${tarpitd_maxconn}"
+
+# Left empty these fall through to the program defaults: both loopback
+# addresses, and a chroot to /var/empty.
+[ -n "${tarpitd_listen}" ] && command_args="${command_args} -l ${tarpitd_listen}"
+[ -n "${tarpitd_chroot}" ] && command_args="${command_args} -r ${tarpitd_chroot}"
 
 start_precmd="tarpitd_precmd"
 
