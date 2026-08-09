@@ -48,12 +48,11 @@ at a time, and commands are read back at the same rate.
 
 ### Why pacing by deadline
 
-A fixed byte rate is the obvious design and it is wrong. Measured against a
-day of production traffic on a real mail server, a flat 1.5 s per byte meant
-the ~1100-byte greeting needed 27 minutes, while the median tolerance of a
-real MTA is 301 seconds — the RFC 5321 greeting timeout. Out of 473 sessions,
-**not one ever completed a single SMTP command**: 72% took one byte and left,
-and the rest gave up mid-greeting. Total time bought was one timeout each.
+A fixed byte rate is the obvious design and it is wrong. Analysis of real
+sessions showed why: at a slow enough rate the multiline greeting takes far
+longer to deliver than the RFC 5321 greeting timeout allows, so senders hang
+up mid-banner and **never complete a single SMTP command**. Every session
+buys exactly one timeout and nothing more.
 
 What buys time is the number of round trips a sender survives, not how slowly
 any one of them is delivered. Pacing every reply to land just inside its own
@@ -136,11 +135,11 @@ ipfw add 1001 fwd ::1,8025 tcp from "table(22)" to me6 25 in
 tarpitd -l 127.0.0.1:8025 -l "[::1]:8025"
 ```
 
-Bear in mind that spam over IPv6 is rare next to IPv4 — measured here, 87 to
-1 — and that hosts which do spam over IPv6 rotate addresses inside their /64.
-Banning single /128 addresses is whack-a-mole and the tarpit never sees them:
-ban the /64 instead. RFC 6177 guarantees a site is never assigned anything
-smaller, so it is the smallest unit that means "the same customer".
+Bear in mind that spam over IPv6 is much rarer than over IPv4, and that hosts
+which do spam over IPv6 tend to rotate addresses within their /64. Banning
+single /128 addresses is whack-a-mole and the tarpit never sees the same host
+twice: ban the /64 instead. RFC 6177 guarantees a site is never assigned
+anything smaller, so it is the smallest unit that means "the same customer".
 
 Check that `net.inet.ip.fw.one_pass` does not upset the rest of your ruleset —
 with `one_pass=1` (the default) a packet does not return to later rules after
