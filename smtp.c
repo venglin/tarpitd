@@ -538,15 +538,17 @@ tp_early_talker(struct conn *c)
 {
 
 	/*
-	 * SMTP is server-speaks-first: nothing legitimate transmits before
-	 * the final greeting line.  Anything that does is spamware, so it
-	 * never gets to see the end of the greeting.
+	 * SMTP is server-speaks-first, so nothing legitimate transmits before
+	 * the final greeting line and anything that does is spamware.  Worth
+	 * noting, but no longer worth punishing: it used to earn an endless
+	 * greeting, which guarantees the session never reaches the dialogue
+	 * where the hours actually are.  Once most arrivals started talking
+	 * early that penalty was costing far more than it took, so they now
+	 * follow the ordinary path and the flag is only a label.
 	 */
 	c->flags |= F_BADBOT;
-	c->gen_left = GEN_INF;
 	if (cfg.verbose >= 1)
-		tp_log(LOG_INFO, "early talker %s, greeting will not end",
-		    c->peer);
+		tp_log(LOG_INFO, "early talker %s", c->peer);
 }
 
 /* -------------------------------------------------------------- command */

@@ -428,8 +428,6 @@ delay_ms(const struct conn *c)
 		}
 	}
 
-	if (c->flags & F_BADBOT)
-		base *= 2;
 	if (base > cfg.maxdrip_ms)
 		base = cfg.maxdrip_ms;
 	if (base < cfg.drip_ms)

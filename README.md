@@ -38,7 +38,7 @@ at a time, and commands are read back at the same rate.
 | Stuttering | One byte at a time in each direction. The peer's send buffer never drains, so it blocks in `write()`. |
 | Deadline pacing | The delay between bytes is not fixed. Each stage has a timeout RFC 5321 tells a sender to allow, and we spend `-X` percent of it on that stage's reply, dividing time left by bytes left before every byte. A long reply goes briskly, a short one is stretched, and either way it lands just inside the sender's patience. |
 | Endless greeting | A multiline `220-` banner. An RFC-conforming client **must** wait for the final `220 ` line, and with `-b 0` that line never comes. |
-| Early talker detection | SMTP is server-speaks-first, so nothing legitimate transmits before the greeting ends. Anything that does gets the endless banner and double delays. |
+| Early talker detection | SMTP is server-speaks-first, so nothing legitimate transmits before the greeting ends. Anything that does is logged and flagged in the session summary — but not punished: an endless banner would stop the session ever reaching the dialogue, which is where nearly all the time is spent. |
 | Extension bloat | `-e` extra unknown extensions in the `EHLO` reply, which a client must read and then ignore. |
 | TLS stall | A TLS record header announcing a 16376-byte `ServerHello`, followed by dribbled random filler. The peer's TLS library has committed to reading a complete handshake message before it can do anything else — including time out at the SMTP layer. When one record finishes, the next one starts. |
 | AUTH honeypot | Offers `PLAIN`/`LOGIN`/`CRAM-MD5`, base64-decodes what the bot sends, logs it, and answers `535` so it keeps guessing. |

@@ -99,9 +99,11 @@ line before it may transmit, and with
 that line never comes.
 .It Early talker detection
 Nothing legitimate transmits before the greeting has finished, since SMTP is
-server-speaks-first.
-A peer that does is certainly spamware, so its greeting is switched to the
-endless form and its stutter delay is doubled for the rest of the session.
+server-speaks-first, so a peer that does is certainly spamware.
+It is noted in the log and in the session summary, but not punished.
+Earlier versions gave it an endless greeting, which turned out to be a poor
+trade: an endless greeting guarantees the session never reaches the dialogue,
+and the dialogue is where nearly all of the time is spent.
 .It Extension bloat
 The
 .Cm EHLO
