@@ -184,8 +184,12 @@ Default 24.
 .It Fl g Ar greet-seconds
 Silence before the first byte of the greeting.
 Default 3.
-It costs every session that much and only catches early talkers, so raising
-it trades throughput for a rare diagnostic.
+It is spent out of the greeting's own budget rather than added to it, since
+the deadline starts when the connection is accepted, so raising it does not
+make the complete greeting arrive any later.
+Values that would leave less than a quarter of that budget for the banner
+itself are reduced, with a warning: past that point the deadline would expire
+before the first byte and the whole greeting would arrive in one burst.
 .It Fl H Ar hostname
 Host name to announce.
 Defaults to the system host name.

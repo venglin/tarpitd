@@ -1362,6 +1362,27 @@ main(int argc, char *argv[])
 
 	openlog("tarpitd", LOG_PID | LOG_NDELAY, LOG_MAIL);
 	signal(SIGPIPE, SIG_IGN);
+
+	/*
+	 * The greeting delay is spent out of the greeting's own budget: the
+	 * deadline is set when the connection is accepted, not when the first
+	 * byte leaves.  Allowed to reach that budget it would expire before
+	 * the banner even starts, the delay would collapse to the floor, and
+	 * the whole greeting would arrive in one burst - the opposite of the
+	 * intent, and with nothing in the log to say so.  Keep a quarter of
+	 * the budget for the banner itself.
+	 */
+	if (cfg.budget_pct > 0) {
+		int budget = tp_phase_secs[PH_GREET] * cfg.budget_pct / 100;
+		int maxgreet = budget - budget / 4;
+
+		if (cfg.greet_s > maxgreet) {
+			tp_log(LOG_WARNING, "greeting delay of %ds would leave "
+			    "too little of the %ds greeting budget for the "
+			    "banner, using %ds", cfg.greet_s, budget, maxgreet);
+			cfg.greet_s = maxgreet;
+		}
+	}
 	raise_nofile(cfg.maxconn + 32);
 
 #ifdef __FreeBSD__
